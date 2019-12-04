@@ -1,0 +1,10 @@
+[Unit]
+Description=ramsync: sync timer, syncs every 15 minutes
+
+[Timer]
+Unit=ramsync_sync.service
+OnBootSec=60s
+OnUnitActiveSec=1h
+
+[Install]
+WantedBy=timers.target

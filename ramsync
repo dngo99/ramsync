@@ -1,0 +1,100 @@
+#!/bin/bash
+set -x
+
+function r_sync()
+{
+	local DIRTOSYNC=$1
+	local SYNCTODIR=$2
+	if [ "$DIRTOSYNC" == "" ] || [ "$SYNCTODIR" == "" ]; then
+		echo "error: (r_sync) source($DIRTOSYNC) and/or destination($SYNCTODIR) are blank"
+		return 1
+	fi
+	if ! [ -e "$DIRTOSYNC" ]; then
+		echo "error: (r_sync) $DIRTOSYNC does not exist"
+		return 1
+	fi
+	if ! grep -qs "$DIRTOSYNC" /proc/mounts && ! grep -qs "$SYNCTODIR" /proc/mounts; then
+		echo "error: (r_sync) $DIRTOSYNC and/or $SYNCTODIR are not mounted"
+		return 1
+	fi
+	echo -n "syncing $DIRTOSYNC to $SYNCTODIR . . . "
+	sync
+	rsync -a --delete --links --inplace --no-whole-file "$DIRTOSYNC/" "$SYNCTODIR/"
+	sync
+	echo "done"
+	return 0
+}
+
+function r_start()
+{
+	local DIRTOSYNC=$1
+	local SYNCTODIR=$2
+	if [ "$DIRTOSYNC" == "" ] || [ "$SYNCTODIR" == "" ]; then
+		echo "error: (r_start) source($DIRTOSYNC) and/or destination($SYNCTODIR) are blank"
+		return 1
+	fi
+	if ! [ -e "$DIRTOSYNC" ]; then
+		echo "error: (r_start) $DIRTOSYNC does not exist"
+		return 1
+	fi
+	USR=$(stat -c %U "$DIRTOSYNC")
+	GRP=$(stat -c %G "$DIRTOSYNC")
+	PEM=$(stat -c %a "$DIRTOSYNC")
+	mkdir -p -m $PEM "$SYNCTODIR"
+	chown $USR:$GRP "$SYNCTODIR"
+	mount -o bind,private "$DIRTOSYNC" "$SYNCTODIR"
+	echo mount -t tmpfs -o "defaults,uid=$USR,gid=$GRP,mode=$PEM,size=512M tmpfs $DIRTOSYNC"
+	mount -t tmpfs -o defaults,uid=$USR,gid=$GRP,mode=$PEM,size=512M tmpfs $DIRTOSYNC
+	#mount -v -t tmpfs -o defaults,uid=mysql,gid=mysql,mode=755,size=512M tmpfs /var/lib/mysql
+	if [ $? -ne 0 ]; then
+		echo "(r_start) error: failed to mount tmpfs for $DIRTOSYNC:"
+		return 1
+	fi
+	chmod $PEM "$DIRTOSYNC"
+	chown $USR:$GRP "$DIRTOSYNC"
+	r_sync "$SYNCTODIR" "$DIRTOSYNC"
+	if [ $? -ne 0 ]; then
+		r_stop "$DIRTOSYNC" "$SYNCTODIR"
+		return 1
+	fi
+	return 0
+}
+
+function r_stop()
+{
+	local DIRTOSYNC=$1
+	local SYNCTODIR=$2
+	if [ "$DIRTOSYNC" == "" ] || [ "$SYNCTODIR" == "" ]; then
+		echo "error: (r_stop) source($DIRTOSYNC) and/or destination($SYNCTODIR) are blank"
+		return 1
+	fi
+	if ! [ -e "$DIRTOSYNC" ]; then
+		echo "error: (r_stop) $DIRTOSYNC does not exist"
+		return 1
+	fi
+	r_sync "$DIRTOSYNC" "$SYNCTODIR"
+	umount -l "$DIRTOSYNC"
+	umount -l "$SYNCTODIR"
+	rm -r "$SYNCTODIR"
+	return 0
+}
+
+case $1 in
+	"start")
+		if [ -e /tmp/ramsync/lock ]; then
+			r_sync /var/lib/mysql /opt/ramsync/mysql
+		else
+			mkdir /tmp/ramsync
+			touch /tmp/ramsync/lock
+			r_start /var/lib/mysql /opt/ramsync/mysql
+		fi
+	;;
+	"sync")
+		r_sync /var/lib/mysql /opt/ramsync/mysql
+	;;
+	"stop")
+		r_stop /var/lib/mysql /opt/ramsync/mysql
+		rm -rf /tmp/ramsync
+	;;
+esac
+exit 0

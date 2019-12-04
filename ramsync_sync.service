@@ -1,0 +1,13 @@
+[Unit]
+Description=ramsync: sync service
+DefaultDependencies=no
+Requires=ramsync.service
+Conflicts=shutdown.target reboot.target halt.target
+IgnoreOnIsolate=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+User=root
+ExecStart=/opt/ramsync/ramsync sync
+

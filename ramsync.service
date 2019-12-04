@@ -1,0 +1,19 @@
+[Unit]
+Description=ramsync: persistent ramdisks
+DefaultDependencies=no
+Before=basic.target shutdown.target apache2.service apparmor.service\
+			 nginx.service lighttpd.service mysql.service mysqld.service
+After=local-fs.target 
+Conflicts=shutdown.target reboot.target halt.target
+IgnoreOnIsolate=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+ExecStart=/opt/ramsync/ramsync start
+ExecStop=/opt/ramsync/ramsync stop
+
+[Install]
+WantedBy=sysinit.target
+
