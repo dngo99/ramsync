@@ -1,3 +1,4 @@
 # Ramsync
 
-Customizable and persistent ram disks.
+Personal use script, WIP.
+Sync select folders to RAM using tmpfs.
