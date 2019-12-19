@@ -1,5 +1,41 @@
 #!/bin/bash
+
+SYSTEMD="/etc/systemd/system"
+
 set -x
+
+
+# FUNCTIONS
+
+
+function r_install()
+{
+	echo "Installing ramsync..."
+	mkdir -m 700 /opt/ramsync
+	cp ramsync /opt/ramsync/
+	r_service
+	r_timer
+	systemctl enable ramsync.service ramsync-sync.timer
+	echo "Installation complete. Please reboot."
+	return 0
+}
+
+function r_uninstall()
+{
+echo "Uninstalling ramsync..."
+	systemctl stop ramsync.service
+	systemctl stop ramsync-sync.service
+	systemctl stop ramsync-sync.timer
+	systemctl disable ramsync.service
+	systemctl disable ramsync-sync.service
+	systemctl disable ramsync-sync.timer
+	rm "$SYSTEMD/ramsync.service"
+	rm "$SYSTEMD/ramsync-sync.service"
+	rm "$SYSTEMD/ramsync-sync.timer"
+	rm -rf /opt/ramsync
+	systemctl daemon-reload
+	echo "Uninstallation complete."
+}
 
 function r_sync()
 {
@@ -29,6 +65,7 @@ function r_start()
 {
 	local DIRTOSYNC=$1
 	local SYNCTODIR=$2
+	local SIZE=$3
 	if [ "$DIRTOSYNC" == "" ] || [ "$SYNCTODIR" == "" ]; then
 		echo "error: (r_start) source($DIRTOSYNC) and/or destination($SYNCTODIR) are blank"
 		return 1
@@ -43,9 +80,8 @@ function r_start()
 	mkdir -p -m $PEM "$SYNCTODIR"
 	chown $USR:$GRP "$SYNCTODIR"
 	mount -o bind,private "$DIRTOSYNC" "$SYNCTODIR"
-	echo mount -t tmpfs -o "defaults,uid=$USR,gid=$GRP,mode=$PEM,size=512M tmpfs $DIRTOSYNC"
-	mount -t tmpfs -o defaults,uid=$USR,gid=$GRP,mode=$PEM,size=512M tmpfs $DIRTOSYNC
-	#mount -v -t tmpfs -o defaults,uid=mysql,gid=mysql,mode=755,size=512M tmpfs /var/lib/mysql
+	echo mount -t tmpfs -o "defaults,uid=$USR,gid=$GRP,mode=$PEM,size=$SIZE tmpfs $DIRTOSYNC"
+	mount -t tmpfs -o defaults,uid=$USR,gid=$GRP,mode=$PEM,size=$SIZE tmpfs $DIRTOSYNC
 	if [ $? -ne 0 ]; then
 		echo "(r_start) error: failed to mount tmpfs for $DIRTOSYNC:"
 		return 1
@@ -79,22 +115,106 @@ function r_stop()
 	return 0
 }
 
+# SYSTEMD SERVICES AND TIMERS
+
+
+# Creates ramsync systemd service
+r_service()
+{
+	cat <<EOF > "$SYSTEMD/ramsync.service"
+[Unit]
+Description=ramsync: persistent ramdisks
+DefaultDependencies=no
+Before=basic.target shutdown.target
+After=local-fs.target 
+Conflicts=shutdown.target reboot.target halt.target
+IgnoreOnIsolate=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+ExecStart=/opt/ramsync/ramsync start
+ExecStop=/opt/ramsync/ramsync stop
+
+[Install]
+WantedBy=sysinit.target
+EOF
+	return 0
+}
+
+# Creates ramsync systemd sync service and timer
+r_timer()
+{
+	cat <<EOF > "$SYSTEMD/ramsync-sync.service"
+[Unit]
+Description=ramsync: sync service
+DefaultDependencies=no
+Requires=ramsync.service
+Conflicts=shutdown.target reboot.target halt.target
+IgnoreOnIsolate=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+User=root
+ExecStart=/opt/ramsync/ramsync sync
+EOF
+	cat <<EOF > "$SYSTEMD/ramsync-sync.timer"
+[Unit]
+Description=ramsync: sync timer, syncs every 1 hour
+
+[Timer]
+Unit=ramsync-sync.service
+OnBootSec=60s
+OnUnitActiveSec=1h
+
+[Install]
+WantedBy=timers.target
+EOF
+	return 0
+}
+
+
+# PROGRAM START
+
+
+if [ "$EUID" -ne 0 ]; then
+	echo "Please run $0 as root."
+	exit 1
+fi
+
 case $1 in
+	"install")
+		if [ -e /opt/ramsync/ramsync ]; then
+			echo "ramsync is already installed"
+		else
+			r_install
+		fi
+	;;
+	"uninstall")
+		r_uninstall
+	;;
 	"start")
 		if [ -e /tmp/ramsync/lock ]; then
-			r_sync /var/lib/mysql /opt/ramsync/mysql
+			echo "ramsync already started, syncing..."
+			r_sync /opt/test /opt/ramsync/test
 		else
 			mkdir /tmp/ramsync
 			touch /tmp/ramsync/lock
-			r_start /var/lib/mysql /opt/ramsync/mysql
+			r_start /opt/test /opt/ramsync/test 512M
 		fi
 	;;
 	"sync")
-		r_sync /var/lib/mysql /opt/ramsync/mysql
+		r_sync /opt/test /opt/ramsync/test
 	;;
 	"stop")
-		r_stop /var/lib/mysql /opt/ramsync/mysql
+		r_stop /opt/test /opt/ramsync/test
 		rm -rf /tmp/ramsync
+	;;
+	*)
+		echo "Usage: ramsync install|uninstall|start|sync|stop"
 	;;
 esac
 exit 0
+
