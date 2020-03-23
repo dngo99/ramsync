@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
 
 SYSTEMD="/etc/systemd/system"
-
-set -x
+TMPFS_MAX=0.25
+TMPFS_MIN=0.5
+INSTALL="/opt/ramsync"
+CONFIG="/etc/opt/ramsync"
 
 
 # FUNCTIONS
 
 
+r_root()
+{
+	
+}
+
 function r_install()
 {
 	echo "Installing ramsync..."
-	mkdir -m 700 /opt/ramsync
-	cp ramsync /opt/ramsync/
+	mkdir -p -m 700 "$INSTALL/bin"
+	cp ramsync "$INSTALL/bin/"
 	r_service
 	r_timer
 	systemctl enable ramsync.service ramsync-sync.timer
@@ -32,9 +39,16 @@ echo "Uninstalling ramsync..."
 	rm "$SYSTEMD/ramsync.service"
 	rm "$SYSTEMD/ramsync-sync.service"
 	rm "$SYSTEMD/ramsync-sync.timer"
-	rm -rf /opt/ramsync
+	rm -rf "$INSTALL"
+	rm -rf "$CONFIG"
 	systemctl daemon-reload
 	echo "Uninstallation complete."
+}
+
+function r_size()
+{
+	vmstat -s | head -n 1 | cut -f6 -d " "
+	du -sk $1 | cut -f1
 }
 
 function r_sync()
@@ -66,6 +80,8 @@ function r_start()
 	local DIRTOSYNC=$1
 	local SYNCTODIR=$2
 	local SIZE=$3
+	local OPTION=""
+	local FILESYS=""
 	if [ "$DIRTOSYNC" == "" ] || [ "$SYNCTODIR" == "" ]; then
 		echo "error: (r_start) source($DIRTOSYNC) and/or destination($SYNCTODIR) are blank"
 		return 1
@@ -74,19 +90,19 @@ function r_start()
 		echo "error: (r_start) $DIRTOSYNC does not exist"
 		return 1
 	fi
-	USR=$(stat -c %U "$DIRTOSYNC")
-	GRP=$(stat -c %G "$DIRTOSYNC")
-	PEM=$(stat -c %a "$DIRTOSYNC")
-	mkdir -p -m $PEM "$SYNCTODIR"
+	local USR=$(stat -c %U "$DIRTOSYNC")
+	local GRP=$(stat -c %G "$DIRTOSYNC")
+	local PEM=$(stat -c %a "$DIRTOSYNC")
+	mkdir -p -m $PERM "$SYNCTODIR"
 	chown $USR:$GRP "$SYNCTODIR"
 	mount -o bind,private "$DIRTOSYNC" "$SYNCTODIR"
-	echo mount -t tmpfs -o "defaults,uid=$USR,gid=$GRP,mode=$PEM,size=$SIZE tmpfs $DIRTOSYNC"
-	mount -t tmpfs -o defaults,uid=$USR,gid=$GRP,mode=$PEM,size=$SIZE tmpfs $DIRTOSYNC
+	echo mount -t tmpfs -o "defaults,uid=$USR,gid=$GRP,mode=$PERM,size=$SIZE tmpfs $DIRTOSYNC"
+	mount -t tmpfs -o defaults,uid=$USR,gid=$GRP,mode=$PERM,size=$SIZE tmpfs $DIRTOSYNC
 	if [ $? -ne 0 ]; then
 		echo "(r_start) error: failed to mount tmpfs for $DIRTOSYNC:"
 		return 1
 	fi
-	chmod $PEM "$DIRTOSYNC"
+	chmod $PERM "$DIRTOSYNC"
 	chown $USR:$GRP "$DIRTOSYNC"
 	r_sync "$SYNCTODIR" "$DIRTOSYNC"
 	if [ $? -ne 0 ]; then
@@ -115,6 +131,17 @@ function r_stop()
 	return 0
 }
 
+function r_guid()
+{
+	local DIRTOSYNC=$1
+	# HASH="$(echo -n $($1) | md5sum | awk '{print $1}')"
+	HASH="$(echo -n $($1) | md5sum | cut -f1 -d' ')"
+	TIME="$(echo $(($(date +%s%N)/100000)))"
+	TIME="$(printf "%x\n" $TIME)"
+	HASH="$HASH$TIME"
+	return "$HASH"
+}
+
 # SYSTEMD SERVICES AND TIMERS
 
 
@@ -134,8 +161,8 @@ IgnoreOnIsolate=yes
 Type=oneshot
 RemainAfterExit=yes
 User=root
-ExecStart=/opt/ramsync/ramsync start
-ExecStop=/opt/ramsync/ramsync stop
+ExecStart=/opt/ramsync/bin/ramsync start
+ExecStop=/opt/ramsync/bin/ramsync stop
 
 [Install]
 WantedBy=sysinit.target
@@ -158,7 +185,7 @@ IgnoreOnIsolate=yes
 Type=oneshot
 RemainAfterExit=no
 User=root
-ExecStart=/opt/ramsync/ramsync sync
+ExecStart=/opt/ramsync/bin/ramsync sync
 EOF
 	cat <<EOF > "$SYSTEMD/ramsync-sync.timer"
 [Unit]
@@ -178,7 +205,6 @@ EOF
 
 # PROGRAM START
 
-
 if [ "$EUID" -ne 0 ]; then
 	echo "Please run $0 as root."
 	exit 1
@@ -186,7 +212,7 @@ fi
 
 case $1 in
 	"install")
-		if [ -e /opt/ramsync/ramsync ]; then
+		if [ -e /opt/ramsync/bin/ramsync ]; then
 			echo "ramsync is already installed"
 		else
 			r_install
@@ -194,6 +220,10 @@ case $1 in
 	;;
 	"uninstall")
 		r_uninstall
+	;;
+	"help")
+	;;
+	"summary")
 	;;
 	"start")
 		if [ -e /tmp/ramsync/lock ]; then
@@ -213,7 +243,7 @@ case $1 in
 		rm -rf /tmp/ramsync
 	;;
 	*)
-		echo "Usage: ramsync install|uninstall|start|sync|stop"
+		echo "Usage: ramsync install|uninstall|help|summary|start|sync|stop"
 	;;
 esac
 exit 0
